@@ -7,6 +7,7 @@ using JSON
 using Dates
 using DataFrames
 using AbstractTrees
+using Statistics
 import HTTP
 
 export add_plugin, handle, query
@@ -55,16 +56,20 @@ function string_buffer(fun)
     String(take!(io))
 end
 
+function kwiterator(dict, keys...)
+    ((k, dict[String(k)]) for k in keys if String(k) in dict)
+end
+
 function multipart(app, req)
     headers = Dict(req[:headers])
-    content_type = headers["content-type" ∈ keys(headers) ? "content-type" : "Content-Type"]    
+    content_type = headers["content-type" ∈ keys(headers) ? "content-type" : "Content-Type"]
     m = match(r"multipart/form-data; boundary=(.*)$", content_type)
     m === nothing && return "Invalid headers"
     boundary_delimiter = m[1]
     length(boundary_delimiter) > 70 && error("boundary delimiter must not be greater than 70 characters")
-    
-    data = HTTP.parse_multipart_body(req[:data], boundary_delimiter)
+    data = HTTP.MultiPartParsing.parse_multipart_body(req[:data], boundary_delimiter)
     req[:params][:multipart] = Dict(d.name => parse_multipart(d) for d in data)
+    @debug "Recieved multipart data"
     app(req)
 end
 
@@ -82,7 +87,12 @@ function register_mime_type(mime, fun)
     push!(mime_mapping, mime => fun)
 end
 
-parse_multipart(multi::HTTP.Multipart) = mime_mapping[multi.contenttype](multi.data)
+function parse_multipart(multi::HTTP.Multipart) 
+    @debug "Getting handler for $(multi.contenttype)"
+    handler = mime_mapping[multi.contenttype]
+    @debug "Found handler for $(multi.contenttype)" handler
+    handler(multi.data)
+end
 
 function handle_post(path, func)
     function app(req)
@@ -108,6 +118,7 @@ function initiate_experiment(req)
     analysis = req[:params][:multipart]["analysis"]
     parameters = get(req[:params][:multipart], "parameters", Dict{String,Any}())
     exp_id = next_key(req[:db])
+    @info "Initiating experiment $exp_id on plugin $(analysis)"
     return string(exp_id), exp_id => plugins[analysis](parameters)
 end
 
